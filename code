@@ -1,0 +1,116 @@
+#include <Servo.h>
+#include <LiquidCrystal.h>
+
+// === Ultrasonic Sensor Pins ===
+const int trigPin = 3;
+const int echoPin = 4;
+
+// === PIR + Servo Pins ===
+const int pirPin   = 2;   // PIR sensor
+const int servoPin = 9;   // Servo motor
+
+// === LCD (connected to A0–A5) ===
+// Example wiring: RS=A5, E=A4, D4=A3, D5=A2, D6=A1, D7=A0
+LiquidCrystal lcd(A5, A4, A3, A2, A1, A0);
+Servo lidServo;
+
+// === Constants ===
+const float BIN_HEIGHT_CM = 30.0;   // Measure actual bin depth
+const int SERVO_OPEN_ANGLE   = 85;  // Adjust as per your lid
+const int SERVO_CLOSED_ANGLE = 0;   // Closed position
+const unsigned long LID_OPEN_TIME = 4000UL; // 4 sec open
+
+// === Variables ===
+unsigned long lidOpenMillis = 0;
+bool lidOpen = false;
+
+void setup() {
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(pirPin, INPUT);
+
+  lcd.begin(16, 2);
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Smart Waste Bin");
+  delay(1500);
+  lcd.clear();
+
+  lidServo.attach(servoPin);
+  lidServo.write(SERVO_CLOSED_ANGLE);
+}
+
+float readDistanceCM() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  unsigned long duration = pulseIn(echoPin, HIGH, 30000UL);
+  if (duration == 0) return 9999;  
+
+  float distance = (duration / 2.0) * 0.0343; 
+  return distance;
+}
+
+int calcFillPercent(float dist) {
+  if (dist > BIN_HEIGHT_CM) return 0;
+  float filled = BIN_HEIGHT_CM - dist;
+  if (filled < 0) filled = 0;
+  float percent = (filled / BIN_HEIGHT_CM) * 100.0;
+  if (percent > 100) percent = 100;
+  return (int)(percent + 0.5);
+}
+
+void loop() {
+  // --- Measure Fill % ---
+  float sum = 0;
+  int samples = 3;
+  for (int i=0; i<samples; i++) {
+    sum += readDistanceCM();
+    delay(50);
+  }
+  float distance = sum / samples;
+  int fillPercent = calcFillPercent(distance);
+
+  // --- PIR detection ---
+  int pirState = digitalRead(pirPin);
+
+  // --- Servo control (only if not full) ---
+  if (pirState == HIGH && !lidOpen && fillPercent < 90) {
+    lidServo.write(SERVO_OPEN_ANGLE);
+    lidOpen = true;
+    lidOpenMillis = millis();
+  }
+
+  if (lidOpen && (millis() - lidOpenMillis >= LID_OPEN_TIME)) {
+    lidServo.write(SERVO_CLOSED_ANGLE);
+    lidOpen = false;
+  }
+
+  if (fillPercent >= 90) {
+    // Force close if full
+    lidServo.write(SERVO_CLOSED_ANGLE);
+    lidOpen = false;
+  }
+
+  // --- LCD Display ---
+  lcd.setCursor(0,0);
+  lcd.print("Fill: ");
+  if (fillPercent < 10) lcd.print("  ");
+  else if (fillPercent < 100) lcd.print(" ");
+  lcd.print(fillPercent);
+  lcd.print("%   ");
+
+  lcd.setCursor(0,1);
+  if (fillPercent >= 90) {
+    lcd.print("Status: FULL     ");
+  } else if (pirState == HIGH) {
+    lcd.print("Status: OPENING  ");
+  } else {
+    lcd.print("Status: READY    ");
+  }
+
+  delay(300);
+}
